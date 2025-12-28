@@ -1,4 +1,4 @@
-name: WINDOWS RDP FINAL
+name: WINDOWS RDP FINAL FIX
 
 on: workflow_dispatch
 
@@ -16,12 +16,8 @@ jobs:
       - name: 🔌 Connect to Ngrok
         shell: pwsh
         run: |
-          # Adding the token you provided directly
           .\ngrok\ngrok.exe config add-authtoken 37SlcjInr1RushUahbqSl08zEP3_6Xta6v3PHownT6s4tvMJm
-          
-          # Start the tunnel for RDP (Port 3389) in the background
           Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
-          
           Write-Host "⏳ Waiting 15 seconds for Ngrok to connect..."
           Start-Sleep -Seconds 15
 
@@ -31,31 +27,29 @@ jobs:
           try {
             $response = Invoke-RestMethod http://localhost:4040/api/tunnels
             $url = $response.tunnels[0].public_url
-            
-            # Print the login info clearly
-            Write-Host "=========================================="
-            Write-Host "✅ YOUR RDP IP: $url"
-            Write-Host "👤 USERNAME:    administrator"
-            Write-Host "🔑 PASSWORD:    OLDUSER#06"
-            Write-Host "=========================================="
-            
-            # Save URL to environment for next steps if needed
             echo "RDP_URL=$url" | Out-File -FilePath $env:GITHUB_ENV -Append
           } catch {
             Write-Error "❌ Could not get URL. Check if your Ngrok account has other open sessions!"
             exit 1
           }
 
-      - name: 🔓 Enable RDP & Set Password
+      - name: 🔓 Enable RDP & Create User
         run: |
-          # 1. Enable RDP Service
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
           
-          # 2. Set the password for the BUILT-IN Administrator
-          # (We do not create a new user, we just update the existing admin)
-          net user administrator "OLDUSER#06" /active:yes
+          # --- FIX: Create a NEW user called RunnerAdmin ---
+          net user RunnerAdmin "OLDUSER#06" /add
+          net localgroup administrators RunnerAdmin /add
+
+      - name: 📝 SHOW LOGIN DETAILS
+        run: |
+          Write-Host "=========================================="
+          Write-Host "✅ YOUR RDP IP: ${{ env.RDP_URL }}"
+          Write-Host "👤 USERNAME:    RunnerAdmin"
+          Write-Host "🔑 PASSWORD:    OLDUSER#06"
+          Write-Host "=========================================="
 
       - name: 🔄 Keep Session Alive
         shell: pwsh
