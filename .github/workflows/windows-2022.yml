@@ -5,8 +5,8 @@ on:
     inputs:
       increment:
         type: string
-        description: 'ngrok token'
-        required: false
+        description: 'Paste your Ngrok Authtoken here'
+        required: true  # Changed to true to ensure you don't forget it
         default: ''
 
 jobs:
@@ -28,22 +28,30 @@ jobs:
       - name: 🔐 Set Ngrok Authtoken
         shell: pwsh
         run: |
+          # Priority 1: Input from the manual run box
           $inputToken = '${{ github.event.inputs.increment }}'
-          $envToken = $Env:NGROK_AUTH
-          $imputTkn = $Env:TKAN
-          $defaultToken = '316WRV55lXVjwT4mXHuMYskqxiu_4bMAdBptaGPiZMBiZz82s'
-          if ($inputToken) {
-          $token = $imputTkn
-          } elseif ($envToken) {
-          $token = $envToken
+          
+          # Priority 2: Secrets (if you set them in repo settings)
+          $secretToken = $Env:NGROK_AUTH
+          
+          if ($inputToken -ne "") {
+            $token = $inputToken
+            Write-Host "👉 Using token provided in Input Box."
+          } elseif ($secretToken -ne "") {
+            $token = $secretToken
+            Write-Host "👉 Using token from GitHub Secrets."
           } else {
-          $token = $defaultToken
+            Write-Host "❌ NO TOKEN FOUND! logic will fail."
+            exit 1
           }
-          Write-Host "Using ngrok token: $($token.Substring(0,[Math]::Min(30,$token.Length)))***"
+
+          # Mask the token in logs so it is safe
+          $maskedToken = $token.Substring(0, 4) + "..."
+          Write-Host "Token detected: $maskedToken"
+
           .\ngrok\ngrok.exe config add-authtoken $token
         env:
-          NGROK_AUTH: ${{ secrets.TAKEN }}
-          TKAN: ${{ vars.TOKUN }}
+          NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
 
       - name: 🔧 Enable RDP & Configure Firewall
         run: |
@@ -52,58 +60,55 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
           Copy-Item wallpaper.bat D:\a\wallpaper.bat
 
-      - name: 🚀 Start Ngrok Tunnel (Hidden Window)
-        run: Start-Process -WindowStyle Hidden PowerShell -ArgumentList './ngrok/ngrok.exe tcp --region ap 3389'
-
-      - name: 🔎 Verify Ngrok process is running
-        shell: pwsh
+      - name: 🚀 Start Ngrok Tunnel
         run: |
-          $proc = Get-Process -Name ngrok -ErrorAction SilentlyContinue
-          if ($proc) {
-            Write-Host "✅ Ngrok process is running (PID: $($proc.Id))"
-          } else {
-            Write-Host "❌ Ngrok process NOT found!"
-            exit 1
-          }
+          # Start Ngrok and log output to a file so we can see errors if it fails
+          Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp --region ap 3389 --log=stdout" -RedirectStandardOutput "ngrok.log" -WindowStyle Hidden
 
       - name: 🕐 Wait for Ngrok to Initialize
-        shell: pwsh
-        run: Start-Sleep -Seconds 20
+        run: Start-Sleep -Seconds 15
 
-      - name: ⚙️ Run Setup Script (start.bat) with NGROK URL + credentials
+      - name: 🔎 Check Ngrok Logs (Debug)
+        run: |
+          if (Test-Path ngrok.log) {
+            Get-Content ngrok.log -Head 20
+          } else {
+            Write-Host "❌ Ngrok log file not found."
+          }
+
+      - name: ⚙️ Run Setup Script
         shell: pwsh
         run: |
-          $retries = 10
           $url = $null
-          while ($retries -gt 0 -and -not $url) {
+          $retries = 20
+          while ($retries -gt 0) {
             try {
               $tunnels = Invoke-RestMethod -Uri 'http://localhost:4040/api/tunnels' -ErrorAction Stop
               if ($tunnels.tunnels.Count -gt 0) {
                 $url = $tunnels.tunnels[0].public_url
+                break
               }
-            } catch {}
-            if (-not $url) { Start-Sleep -Seconds 3 }
+            } catch {
+              Write-Host "⚠️ API not ready yet... retrying ($retries)"
+            }
+            Start-Sleep -Seconds 3
             $retries--
           }
 
           if (-not $url) {
-            Write-Host "❌ Could not fetch Ngrok URL. Check ngrok process and authtoken."
+            Write-Host "❌ Still no URL. Showing process list:"
+            Get-Process ngrok -ErrorAction SilentlyContinue
             exit 1
           }
 
-          Write-Host "✅ Ngrok Public URL: $url"
+          Write-Host "✅ SUCCESS! Ngrok Public URL: $url"
 
           $escapedUrl = $url.Replace('"', '\"')
-          $escapedUser = 'administrator'.Replace('"','\"')
-          $escapedPass = 'OLDUSER#06'.Replace('"','\"')
+          $escapedUser = 'administrator'
+          $escapedPass = 'OLDUSER#06'
 
-          $cmd = "start.bat `"$escapedUrl`" `"$escapedUser`" `"$escapedPass`""
-          #Write-Host "Running: $cmd"
-          cmd.exe /c $cmd
-
-      - name: 🌐 Debug Ngrok API response raw
-        shell: pwsh
-        run: curl.exe -s http://localhost:4040/api/tunnels | Write-Host
+          # Important: Call the batch file using cmd /c
+          cmd.exe /c "start.bat `"$escapedUrl`" `"$escapedUser`" `"$escapedPass`""
 
       - name: 🔁 Keep Runner Alive
         shell: pwsh
