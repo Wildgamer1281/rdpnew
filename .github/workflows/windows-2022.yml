@@ -1,4 +1,4 @@
-name: WORKING RDP
+name: WINDOWS RDP FINAL
 
 on: workflow_dispatch
 
@@ -8,62 +8,59 @@ jobs:
     timeout-minutes: 9999
 
     steps:
-      # 1. Download and Unzip Ngrok
       - name: 🔽 Download Ngrok
         run: |
           Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
           Expand-Archive ngrok.zip
 
-      # 2. Connect to Ngrok (Using the token you gave me)
-      - name: 🔌 Connect Ngrok
+      - name: 🔌 Connect to Ngrok
         shell: pwsh
         run: |
+          # Adding the token you provided directly
           .\ngrok\ngrok.exe config add-authtoken 37SlcjInr1RushUahbqSl08zEP3_6Xta6v3PHownT6s4tvMJm
+          
+          # Start the tunnel for RDP (Port 3389) in the background
           Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
-          Write-Host "⏳ Waiting for Ngrok to connect..."
-          Start-Sleep -Seconds 10
+          
+          Write-Host "⏳ Waiting 15 seconds for Ngrok to connect..."
+          Start-Sleep -Seconds 15
 
-      # 3. Get the Address (Public URL)
-      - name: 🔗 Get Ngrok URL
-        id: ngrok
+      - name: 🔍 Get RDP Address
         shell: pwsh
         run: |
           try {
-            $resp = Invoke-RestMethod http://localhost:4040/api/tunnels
-            $url = $resp.tunnels[0].public_url
-            Write-Host "✅ YOUR URL IS: $url"
-            echo "URL=$url" >> $env:GITHUB_ENV
+            $response = Invoke-RestMethod http://localhost:4040/api/tunnels
+            $url = $response.tunnels[0].public_url
+            
+            # Print the login info clearly
+            Write-Host "=========================================="
+            Write-Host "✅ YOUR RDP IP: $url"
+            Write-Host "👤 USERNAME:    administrator"
+            Write-Host "🔑 PASSWORD:    OLDUSER#06"
+            Write-Host "=========================================="
+            
+            # Save URL to environment for next steps if needed
+            echo "RDP_URL=$url" | Out-File -FilePath $env:GITHUB_ENV -Append
           } catch {
-            Write-Error "❌ Ngrok failed to start. Check if you have other tunnels running on your account!"
+            Write-Error "❌ Could not get URL. Check if your Ngrok account has other open sessions!"
             exit 1
           }
 
-      # 4. Enable RDP & Firewall
-      - name: 🔓 Enable RDP
+      - name: 🔓 Enable RDP & Set Password
         run: |
+          # 1. Enable RDP Service
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-
-      # 5. Set Password for "Administrator"
-      - name: 👤 Set User Password
-        run: |
-          # We use the built-in Administrator account so we don't have permission issues
+          
+          # 2. Set the password for the BUILT-IN Administrator
+          # (We do not create a new user, we just update the existing admin)
           net user administrator "OLDUSER#06" /active:yes
 
-      # 6. Show Login Info
-      - name: 📝 LOGIN DETAILS
+      - name: 🔄 Keep Session Alive
+        shell: pwsh
         run: |
-          Write-Host "----------------------------------------"
-          Write-Host "Computer: ${{ env.URL }}"
-          Write-Host "Username: administrator"
-          Write-Host "Password: OLDUSER#06"
-          Write-Host "----------------------------------------"
-
-      # 7. Keep Alive (Loop)
-      - name: 🔄 Keep Running
-        run: |
-          Write-Host "RDP is ready! Don't close this tab."
-          while($true) {
-            Start-Sleep -Seconds 30
+          Write-Host "RDP is ready! Use the details printed above to login."
+          while ($true) {
+            Start-Sleep -Seconds 60
           }
