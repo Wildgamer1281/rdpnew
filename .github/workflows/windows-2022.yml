@@ -1,12 +1,6 @@
-name: WINDOWS RDP (Self-Contained)
+name: WORKING RDP
 
-on:
-  workflow_dispatch:
-    inputs:
-      ngrok_token:
-        type: string
-        description: 'Paste Ngrok AuthToken (Required)'
-        required: true
+on: workflow_dispatch
 
 jobs:
   build:
@@ -14,107 +8,62 @@ jobs:
     timeout-minutes: 9999
 
     steps:
-      - name: 📂 Create Essential Scripts (Inline)
-        shell: pwsh
-        run: |
-          # 1. Create loop.ps1 to keep the runner alive
-          $loopContent = @"
-          Write-Host "Loop started..."
-          while (`$true) {
-            Start-Sleep -Seconds 30
-          }
-          "@
-          Set-Content -Path "loop.ps1" -Value $loopContent
-
-          # 2. Create start.bat with the Password Fix
-          $batchContent = @"
-          @echo off
-          set "NGROK_URL=%~1"
-          set "USERNAME=%~2"
-          set "PASSWORD=%~3"
-          
-          echo Configuration...
-          del /f "C:\Users\Public\Desktop\Epic Games Launcher.lnk" >nul 2>&1
-          net config server /srvcomment:"Windows Server 2019 By administrator" >nul 2>&1
-          REG ADD "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /V EnableAutoTray /T REG_DWORD /D 0 /F >nul 2>&1
-          
-          echo Setting up User Account...
-          net user "%USERNAME%" "%PASSWORD%" /add >nul 2>&1
-          if %errorlevel% neq 0 (
-              echo User exists, updating password...
-              net user "%USERNAME%" "%PASSWORD%" >nul 2>&1
-          )
-          net localgroup administrators "%USERNAME%" /add >nul 2>&1
-          net user administrator /active:yes >nul
-          
-          echo Setup Complete.
-          "@
-          Set-Content -Path "start.bat" -Value $batchContent
-
-      - name: 🔽 Download & Extract Ngrok
+      # 1. Download and Unzip Ngrok
+      - name: 🔽 Download Ngrok
         run: |
           Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip -DestinationPath .
+          Expand-Archive ngrok.zip
 
-      - name: 🔐 Authenticate Ngrok
+      # 2. Connect to Ngrok (Using the token you gave me)
+      - name: 🔌 Connect Ngrok
         shell: pwsh
         run: |
-          $token = '${{ inputs.ngrok_token }}'
-          if (-not $token) {
-            Write-Error "❌ Error: Ngrok Token is EMPTY. Please enter it when running the workflow."
-            exit 1
-          }
-          .\ngrok.exe config add-authtoken $token
+          .\ngrok\ngrok.exe config add-authtoken 37SlcjInr1RushUahbqSl08zEP3_6Xta6v3PHownT6s4tvMJm
+          Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
+          Write-Host "⏳ Waiting for Ngrok to connect..."
+          Start-Sleep -Seconds 10
 
-      - name: 🚀 Start Ngrok Tunnel
+      # 3. Get the Address (Public URL)
+      - name: 🔗 Get Ngrok URL
+        id: ngrok
         shell: pwsh
         run: |
-          # Start ngrok in background and log output
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -RedirectStandardOutput "ngrok.log" -WindowStyle Hidden
-          Write-Host "⏳ Ngrok starting... waiting 15 seconds..."
-          Start-Sleep -Seconds 15
-
-      - name: 🔍 Debug Ngrok (Check if failed)
-        shell: pwsh
-        run: |
-          if (Test-Path ngrok.log) {
-            $logContent = Get-Content ngrok.log -Raw
-            if ($logContent -match "ERR_NGROK_") {
-                Write-Host "❌ NGROK ERROR DETECTED IN LOGS:" -ForegroundColor Red
-                Write-Host $logContent
-                exit 1
-            }
-          }
-
-      - name: 🔗 Fetch URL & Create User
-        shell: pwsh
-        run: |
-          $retries = 10
-          $url = $null
-          while ($retries -gt 0) {
-            try {
-              $resp = Invoke-RestMethod -Uri 'http://localhost:4040/api/tunnels' -ErrorAction Stop
-              $url = $resp.tunnels[0].public_url
-              if ($url) { break }
-            } catch {
-              Write-Host "Trying to fetch URL... ($retries left)"
-            }
-            Start-Sleep -Seconds 5
-            $retries--
-          }
-
-          if (-not $url) {
-            Write-Error "❌ FAILED to get Ngrok URL. Is the token correct? Is your account limited?"
-            if (Test-Path ngrok.log) { Get-Content ngrok.log }
+          try {
+            $resp = Invoke-RestMethod http://localhost:4040/api/tunnels
+            $url = $resp.tunnels[0].public_url
+            Write-Host "✅ YOUR URL IS: $url"
+            echo "URL=$url" >> $env:GITHUB_ENV
+          } catch {
+            Write-Error "❌ Ngrok failed to start. Check if you have other tunnels running on your account!"
             exit 1
           }
 
-          Write-Host "✅ SUCCESS! Your RDP URL is: $url" -ForegroundColor Green
-          
-          # Run the generated batch file to set password
-          $user = "administrator"
-          $pass = "OLDUSER#06"
-          cmd.exe /c "start.bat $url $user $pass"
+      # 4. Enable RDP & Firewall
+      - name: 🔓 Enable RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-      - name: 🔁 Keep Alive
-        run: pwsh -File .\loop.ps1
+      # 5. Set Password for "Administrator"
+      - name: 👤 Set User Password
+        run: |
+          # We use the built-in Administrator account so we don't have permission issues
+          net user administrator "OLDUSER#06" /active:yes
+
+      # 6. Show Login Info
+      - name: 📝 LOGIN DETAILS
+        run: |
+          Write-Host "----------------------------------------"
+          Write-Host "Computer: ${{ env.URL }}"
+          Write-Host "Username: administrator"
+          Write-Host "Password: OLDUSER#06"
+          Write-Host "----------------------------------------"
+
+      # 7. Keep Alive (Loop)
+      - name: 🔄 Keep Running
+        run: |
+          Write-Host "RDP is ready! Don't close this tab."
+          while($true) {
+            Start-Sleep -Seconds 30
+          }
